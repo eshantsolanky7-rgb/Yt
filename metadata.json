@@ -1,0 +1,6 @@
+{
+  "name": "YouTube Video & Audio Downloader",
+  "description": "Download YouTube and Instagram videos, reels, and audios in high quality MP4, MP3, 1080p, 720p, and thumbnails easily with exact file size and duration timeline. Presented by S_Series India (Founder: Eshant Solanky).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
