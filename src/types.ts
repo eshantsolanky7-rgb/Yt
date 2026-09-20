@@ -7,8 +7,6 @@ export interface FormatOption {
   qualityLabel?: string;
   bitrate?: string;
   approxSize: string;
-  exactSize?: string;
-  sizeBytes?: number;
   badge?: string;
   note?: string;
 }
@@ -30,7 +28,6 @@ export interface ThumbnailsMap {
 }
 
 export interface VideoInfo {
-  platform: 'youtube' | 'instagram';
   videoId: string;
   videoUrl: string;
   title: string;
@@ -38,25 +35,22 @@ export interface VideoInfo {
   authorUrl: string;
   thumbnail: string;
   thumbnails: ThumbnailsMap;
-  embedUrl?: string;
-  duration?: string;
-  durationSeconds?: number;
-  filesizeFormatted?: string;
+  embedUrl: string;
   videoFormats: FormatOption[];
   audioFormats: FormatOption[];
-  engines?: EngineOption[];
+  engines: EngineOption[];
+  isInstagram?: boolean;
 }
 
 export interface HistoryItem {
   id: string;
-  platform?: 'youtube' | 'instagram';
   videoId: string;
-  videoUrl?: string;
+  videoUrl: string;
   title: string;
   author: string;
   thumbnail: string;
-  duration?: string;
   timestamp: number;
+  isInstagram?: boolean;
 }
 
 export type Language = 'en' | 'hi';

@@ -1,8 +1,5 @@
 import express from "express";
 import path from "path";
-import { exec } from "child_process";
-import fs from "fs";
-import os from "os";
 import { createServer as createViteServer } from "vite";
 
 const app = express();
@@ -10,9 +7,9 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// Helper function to extract YouTube video ID from various formats
-function extractYouTubeId(input: string): string | null {
-  if (!input) return null;
+// Helper functions to extract IDs from various formats
+function extractVideoId(input: unknown): string | null {
+  if (!input || typeof input !== 'string') return null;
   const trimmed = input.trim();
 
   // Pure 11-char ID
@@ -43,253 +40,238 @@ function extractYouTubeId(input: string): string | null {
   return null;
 }
 
-// Unified URL parser for YouTube & Instagram
-function parseMediaInput(input: string): { platform: 'youtube' | 'instagram' | null; id: string | null; url: string | null } {
-  if (!input) return { platform: null, id: null, url: null };
+function extractInstagramShortcode(input: unknown): string | null {
+  if (!input || typeof input !== 'string') return null;
   const trimmed = input.trim();
 
-  // 1. Instagram check
-  const igMatch = trimmed.match(/(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am)\/(?:reel|reels|p|tv|share\/reel)\/([a-zA-Z0-9_-]+)/i);
-  if (igMatch) {
-    const id = igMatch[1];
-    return {
-      platform: 'instagram',
-      id,
-      url: `https://www.instagram.com/reel/${id}/`
-    };
-  }
+  // 1. Direct match with standard Instagram domains and paths
+  // Matches: /reel/ID, /reels/ID, /p/ID, /tv/ID, /share/reel/ID, /share/p/ID, /share/ID, /username/reel/ID
+  const domainPattern = /(?:instagram\.com|instagr\.am)\/(?:[^\/?#\s]+\/)?(?:share\/(?:reel|p)?\/|p\/|reel\/|reels\/|tv\/)?([A-Za-z0-9_-]{9,15})/i;
+  const domainMatch = trimmed.match(domainPattern);
+  if (domainMatch && domainMatch[1]) return domainMatch[1];
 
-  // 2. YouTube check
-  const ytId = extractYouTubeId(trimmed);
-  if (ytId) {
-    return {
-      platform: 'youtube',
-      id: ytId,
-      url: `https://www.youtube.com/watch?v=${ytId}`
-    };
-  }
+  // 2. Relative paths or /reel/ID anywhere in the string
+  const pathPattern = /(?:^|[\/\s])(?:share\/(?:reel|p)\/|p\/|reel\/|reels\/|tv\/)([A-Za-z0-9_-]{9,15})/i;
+  const pathMatch = trimmed.match(pathPattern);
+  if (pathMatch && pathMatch[1]) return pathMatch[1];
 
-  return { platform: null, id: null, url: null };
+  // 3. Raw shortcode (typically 11 characters like C8q72N_vL-i)
+  const rawMatch = trimmed.match(/^[A-Za-z0-9_-]{9,15}$/);
+  if (rawMatch) return rawMatch[0];
+
+  return null;
 }
 
-// Helper functions for duration and filesize
-function formatDuration(seconds?: number): string {
-  if (!seconds || isNaN(seconds) || seconds <= 0) return "";
-  const s = Math.round(seconds);
-  const m = Math.floor(s / 60);
-  const remS = s % 60;
-  if (m >= 60) {
-    const h = Math.floor(m / 60);
-    const remM = m % 60;
-    return `${h}:${remM.toString().padStart(2, "0")}:${remS.toString().padStart(2, "0")}`;
-  }
-  return `${m}:${remS.toString().padStart(2, "0")}`;
-}
+// Generate a high-resolution, branded Instagram Reel poster SVG that never fails to render
+function generateInstagramSvg(shortcode: string): string {
+  const code = (shortcode || "").toUpperCase();
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" width="800" height="450">
+  <defs>
+    <linearGradient id="ig-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#405de6"/>
+      <stop offset="20%" stop-color="#5851db"/>
+      <stop offset="40%" stop-color="#833ab4"/>
+      <stop offset="60%" stop-color="#c13584"/>
+      <stop offset="80%" stop-color="#e1306c"/>
+      <stop offset="100%" stop-color="#fd1d1d"/>
+    </linearGradient>
+    <linearGradient id="overlay" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="rgba(0,0,0,0.15)"/>
+      <stop offset="100%" stop-color="rgba(0,0,0,0.85)"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="rgba(0,0,0,0.5)"/>
+    </filter>
+  </defs>
 
-function parseDurationStringToSeconds(str?: string): number {
-  if (!str) return 0;
-  const parts = str.trim().split(":").map(Number);
-  if (parts.some(isNaN)) return 0;
-  if (parts.length === 3) {
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  }
-  if (parts.length === 2) {
-    return parts[0] * 60 + parts[1];
-  }
-  if (parts.length === 1) {
-    return parts[0];
-  }
-  return 0;
-}
+  <rect width="800" height="450" fill="url(#ig-gradient)"/>
+  <rect width="800" height="450" fill="url(#overlay)"/>
 
-function formatBytes(bytes?: number): string {
-  if (!bytes || isNaN(bytes) || bytes <= 0) return "";
-  if (bytes < 1024 * 1024) {
-    return `${Math.round(bytes / 1024)} KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  <circle cx="700" cy="80" r="140" fill="rgba(255,255,255,0.06)"/>
+  <circle cx="100" cy="380" r="180" fill="rgba(0,0,0,0.15)"/>
+
+  <g transform="translate(400, 160)" filter="url(#shadow)">
+    <rect x="-50" y="-50" width="100" height="100" rx="26" fill="none" stroke="#ffffff" stroke-width="8"/>
+    <circle cx="0" cy="0" r="24" fill="none" stroke="#ffffff" stroke-width="8"/>
+    <circle cx="28" cy="-28" r="5" fill="#ffffff"/>
+  </g>
+
+  <g text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+    <rect x="330" y="235" width="140" height="26" rx="13" fill="rgba(0,0,0,0.4)" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+    <text x="400" y="252" fill="#ffffff" font-size="12" font-weight="700" letter-spacing="1.5">INSTAGRAM</text>
+    <text x="400" y="295" fill="#ffffff" font-size="26" font-weight="800" letter-spacing="0.5">REEL VIDEO PREVIEW</text>
+    <text x="400" y="332" fill="#fbbf24" font-size="16" font-weight="700" font-family="monospace" letter-spacing="1">ID: ${code}</text>
+    <text x="400" y="390" fill="#e2e8f0" font-size="13" font-weight="600" opacity="0.85">S_series India • HD Video Downloader</text>
+  </g>
+</svg>`;
 }
 
 // API: Health check
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({ status: "ok", timestamp: new Date().toISOString(), app: "Media Saver" });
 });
 
-// API: Get media metadata & format choices (YouTube & Instagram)
+// API: Dynamic Instagram SVG Thumbnail
+app.get("/api/ig-thumbnail/:shortcode", (req, res) => {
+  const shortcode = req.params.shortcode || "";
+  const svg = generateInstagramSvg(shortcode);
+  res.setHeader("Content-Type", "image/svg+xml; charset=utf-8");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.send(svg);
+});
+
+// API: Get video metadata & format choices
 app.get("/api/info", async (req, res) => {
   try {
     const rawUrl = req.query.url as string;
     if (!rawUrl) {
-      return res.status(400).json({ error: "Please provide a valid YouTube or Instagram link." });
+      return res.status(400).json({ error: "Please provide a valid URL." });
     }
 
-    const media = parseMediaInput(rawUrl);
-    if (!media.platform || !media.url) {
-      return res.status(400).json({
-        error: "Invalid link. Please enter a valid YouTube link (video/shorts) or Instagram link (reel/post)."
-      });
-    }
+    const isInstagram = /(?:instagram\.com|instagr\.am)/i.test(rawUrl) || Boolean(extractInstagramShortcode(rawUrl));
 
-    // A. Handle Instagram URLs
-    if (media.platform === "instagram") {
-      const targetUrl = media.url;
-      const cmd = `yt-dlp -j --no-warnings "${targetUrl}"`;
+    if (isInstagram) {
+      const shortcode = extractInstagramShortcode(rawUrl);
+      if (!shortcode) {
+        return res.status(400).json({ error: "Invalid Instagram URL. Please enter a valid Reel, Post or Share link." });
+      }
 
-      return exec(cmd, { timeout: 20000 }, async (err, stdout) => {
-        if (err || !stdout) {
-          console.error("Instagram yt-dlp metadata error:", err);
-          return res.status(422).json({
-            error: "Unable to retrieve Instagram media. Please make sure the post is public and accessible."
-          });
+      try {
+        // High-resolution reliable SVG thumbnail
+        const thumbnail = `/api/ig-thumbnail/${shortcode}`;
+        const fallbackThumbnail = "https://images.unsplash.com/photo-1611224923853-80b023f02d71?q=80&w=1000&auto=format&fit=crop";
+
+        // Try extracting author username if present in URL
+        let author = "Instagram Creator";
+        const userMatch = rawUrl.match(/(?:instagram\.com|instagr\.am)\/([A-Za-z0-9_.]+)\/(?:reel|reels|p|tv)\//i);
+        if (userMatch && userMatch[1] && !['reel', 'reels', 'p', 'tv', 'share'].includes(userMatch[1].toLowerCase())) {
+          author = userMatch[1];
         }
 
-        try {
-          const data = JSON.parse(stdout);
-          const shortcode = media.id || data.id || "instagram_post";
-          const title = data.title && data.title !== "Video by " ? data.title : `Instagram Video (${shortcode})`;
-          const author = data.uploader || "Instagram Creator";
-          const authorUrl = data.uploader_id ? `https://www.instagram.com/${data.uploader_id}/` : "";
-          const thumbnail = data.thumbnail || "";
+        const title = author && author !== "Instagram Creator" 
+          ? `Instagram Reel by @${author} (${shortcode})` 
+          : `Instagram Reel (${shortcode})`;
 
-          // Determine duration
-          let durationSeconds = data.duration || 0;
-          let durationStr = data.duration_string || "";
+        const igReelUrl = `https://www.instagram.com/reel/${shortcode}/`;
+        const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/`;
 
-          // Find direct format filesize or probe
-          let bestSize = 0;
-          const mp4Formats = (data.formats || []).filter((f: any) => f.url && f.ext === "mp4");
-          const bestFmt = mp4Formats[mp4Formats.length - 1];
-
-          if (bestFmt?.filesize) {
-            bestSize = bestFmt.filesize;
-          } else if (bestFmt?.filesize_approx) {
-            bestSize = bestFmt.filesize_approx;
-          } else if (bestFmt?.url) {
-            try {
-              const headCheck = await fetch(bestFmt.url, { method: "HEAD", signal: AbortSignal.timeout(3000) });
-              const cl = headCheck.headers.get("content-length");
-              if (cl) bestSize = parseInt(cl, 10);
-            } catch {}
-          }
-
-          // If duration not present in json, probe remote stream format with ffprobe
-          if (!durationSeconds && bestFmt?.url) {
-            try {
-              const pRes = await new Promise<any>((resolve) => {
-                exec(`ffprobe -v error -show_entries format=duration,size -of json "${bestFmt.url}"`, { timeout: 4000 }, (pErr, pOut) => {
-                  if (pErr || !pOut) return resolve(null);
-                  try { resolve(JSON.parse(pOut)); } catch { resolve(null); }
-                });
-              });
-              if (pRes?.format?.duration) {
-                durationSeconds = parseFloat(pRes.format.duration);
-                durationStr = formatDuration(durationSeconds);
-              }
-              if (!bestSize && pRes?.format?.size) {
-                bestSize = parseInt(pRes.format.size, 10);
-              }
-            } catch {}
-          }
-
-          if (!durationStr && durationSeconds) {
-            durationStr = formatDuration(durationSeconds);
-          }
-
-          // Exact sizes calculated from probed data or bitrate
-          const hdSizeFormatted = bestSize > 0 ? formatBytes(bestSize) : (durationSeconds ? formatBytes(durationSeconds * 450000) : "10.2 MB");
-          const sdSizeFormatted = bestSize > 0 ? formatBytes(Math.round(bestSize * 0.55)) : (durationSeconds ? formatBytes(durationSeconds * 220000) : "4.8 MB");
-          const audio320Formatted = durationSeconds ? formatBytes(durationSeconds * 40000) : "2.4 MB";
-          const audio192Formatted = durationSeconds ? formatBytes(durationSeconds * 24000) : "1.5 MB";
-          const audioM4aFormatted = durationSeconds ? formatBytes(durationSeconds * 20000) : "1.2 MB";
-
-          const responsePayload = {
-            platform: "instagram",
-            videoId: shortcode,
-            videoUrl: targetUrl,
-            title,
-            author,
-            authorUrl,
-            thumbnail,
-            duration: durationStr || (durationSeconds ? formatDuration(durationSeconds) : ""),
-            durationSeconds: Math.round(durationSeconds),
-            filesizeFormatted: hdSizeFormatted,
-            thumbnails: {
-              maxres: thumbnail,
-              hq: thumbnail,
-              mq: thumbnail,
-              standard: thumbnail
+        // Return comprehensive Instagram payload with formats, embedUrl and dedicated engines
+        return res.json({
+          videoId: shortcode,
+          videoUrl: igReelUrl,
+          title,
+          author,
+          authorUrl: author !== "Instagram Creator" ? `https://www.instagram.com/${author}/` : igReelUrl,
+          thumbnail,
+          thumbnails: {
+            maxres: thumbnail,
+            hq: thumbnail,
+            mq: thumbnail,
+            standard: fallbackThumbnail
+          },
+          isInstagram: true,
+          embedUrl,
+          videoFormats: [
+            {
+              id: "1080p",
+              quality: "1080p",
+              label: "Full HD (1080p)",
+              ext: "mp4",
+              resolution: "Original HD",
+              qualityLabel: "1080p Original",
+              approxSize: "~ 15 - 40 MB",
+              badge: "Original HD"
             },
-            embedUrl: `https://www.instagram.com/reel/${shortcode}/embed/`,
-            videoFormats: [
-              {
-                id: "ig-best",
-                quality: "HD",
-                label: "Original HD MP4 (Highest Quality)",
-                ext: "mp4",
-                resolution: "1080p / 720p HD",
-                qualityLabel: "Full Resolution",
-                approxSize: hdSizeFormatted,
-                exactSize: hdSizeFormatted,
-                sizeBytes: bestSize || (durationSeconds ? Math.round(durationSeconds * 450000) : undefined),
-                badge: "Best Quality"
-              },
-              {
-                id: "ig-sd",
-                quality: "SD",
-                label: "Standard MP4 Video",
-                ext: "mp4",
-                resolution: "Standard",
-                qualityLabel: "Standard Definition",
-                approxSize: sdSizeFormatted,
-                exactSize: sdSizeFormatted,
-                sizeBytes: bestSize ? Math.round(bestSize * 0.55) : (durationSeconds ? Math.round(durationSeconds * 220000) : undefined),
-                badge: "Fast"
-              }
-            ],
-            audioFormats: [
-              {
-                id: "ig-mp3-320",
-                quality: "320 kbps",
-                label: "MP3 Studio HD (320 kbps)",
-                ext: "mp3",
-                bitrate: "320 kbps",
-                approxSize: audio320Formatted,
-                exactSize: audio320Formatted,
-                badge: "High Quality"
-              },
-              {
-                id: "ig-mp3-192",
-                quality: "192 kbps",
-                label: "MP3 Standard (192 kbps)",
-                ext: "mp3",
-                bitrate: "192 kbps",
-                approxSize: audio192Formatted,
-                exactSize: audio192Formatted,
-                badge: "Recommended"
-              },
-              {
-                id: "ig-m4a",
-                quality: "M4A",
-                label: "Original Audio (M4A / AAC)",
-                ext: "m4a",
-                bitrate: "Original",
-                approxSize: audioM4aFormatted,
-                exactSize: audioM4aFormatted,
-                badge: "Original Codec"
-              }
-            ]
-          };
+            {
+              id: "720p",
+              quality: "720p",
+              label: "HD (720p)",
+              ext: "mp4",
+              resolution: "720p",
+              qualityLabel: "720p HD",
+              approxSize: "~ 8 - 20 MB",
+              badge: "Popular"
+            },
+            {
+              id: "480p",
+              quality: "480p",
+              label: "Fast SD (480p)",
+              ext: "mp4",
+              resolution: "480p",
+              qualityLabel: "480p Mobile",
+              approxSize: "~ 4 - 10 MB",
+              badge: "Fast"
+            }
+          ],
+          audioFormats: [
+            {
+              id: "320k",
+              quality: "320 kbps",
+              label: "MP3 Reel Audio (320 kbps)",
+              ext: "mp3",
+              bitrate: "320 kbps",
+              approxSize: "~ 3 - 6 MB",
+              badge: "HQ Audio"
+            },
+            {
+              id: "128k",
+              quality: "128 kbps",
+              label: "MP3 Standard (128 kbps)",
+              ext: "mp3",
+              bitrate: "128 kbps",
+              approxSize: "~ 1 - 3 MB",
+              badge: "Original Sound"
+            }
+          ],
+          engines: [
+            {
+              id: "fastdl",
+              name: "Server 1: FastDL Pro (HD MP4)",
+              description: "Fastest 1-click downloader for Instagram Reels & Videos in original HD quality",
+              url: `https://fastdl.app/en?url=${encodeURIComponent(igReelUrl)}`,
+              recommended: true,
+              badge: "Fastest"
+            },
+            {
+              id: "snapsave",
+              name: "Server 2: SnapSave / SnapInsta HD",
+              description: "High-speed clean server for Instagram reels, videos and carousel posts",
+              url: `https://snapsave.app/`,
+              recommended: false,
+              badge: "Full HD"
+            },
+            {
+              id: "saveinsta",
+              name: "Server 3: Save-Insta (Reels & Audio)",
+              description: "Direct Instagram reel and MP3 audio extractor with instant high-quality output",
+              url: `https://www.save-insta.com/reels-downloader/`,
+              recommended: false,
+              badge: "Direct Audio/Video"
+            },
+            {
+              id: "indown",
+              name: "Server 4: InDown Direct Saver",
+              description: "Direct Instagram reel saver with high quality video output without popups",
+              url: `https://indown.io/`,
+              recommended: false,
+              badge: "Reliable"
+            }
+          ]
+        });
+      } catch (igErr) {
+        console.error("Instagram info error:", igErr);
+        return res.status(500).json({ error: "Failed to fetch Instagram details. Please try again." });
+      }
+    }
 
-          return res.json(responsePayload);
-        } catch (parseErr) {
-          console.error("Failed to parse Instagram info JSON:", parseErr);
-          return res.status(500).json({ error: "Failed to process Instagram media information." });
-        }
+    // YouTube logic
+    const videoId = extractVideoId(rawUrl);
+    if (!videoId) {
+      return res.status(400).json({
+        error: "Invalid YouTube URL. Please enter a valid link (e.g., https://www.youtube.com/watch?v=... or https://youtu.be/...)"
       });
     }
 
-    // B. Handle YouTube URLs
-    const videoId = media.id!;
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(videoUrl)}&format=json`;
 
@@ -297,8 +279,6 @@ app.get("/api/info", async (req, res) => {
     let author = "YouTube Creator";
     let authorUrl = "";
     let embedHtml = "";
-    let durationStr = "";
-    let durationSeconds = 0;
 
     try {
       const oembedRes = await fetch(oembedUrl, {
@@ -317,34 +297,6 @@ app.get("/api/info", async (req, res) => {
       // Fallback silently if oembed has network issue
     }
 
-    // Query YouTube search to obtain exact video timeline duration
-    try {
-      const searchRes = await fetch(`https://www.youtube.com/results?search_query=${videoId}`, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        },
-        signal: AbortSignal.timeout(4000)
-      });
-      if (searchRes.ok) {
-        const sHtml = await searchRes.text();
-        const jsonMatch = sHtml.match(/ytInitialData\s*=\s*({.+?});/);
-        if (jsonMatch) {
-          const str = jsonMatch[1];
-          const idx = str.indexOf(`"videoId":"${videoId}"`);
-          if (idx !== -1) {
-            const slice = str.slice(idx, idx + 1500);
-            const durMatch = slice.match(/"lengthText"\s*:\s*\{.*?"simpleText"\s*:\s*"([0-9:]+)"/);
-            if (durMatch && durMatch[1]) {
-              durationStr = durMatch[1];
-              durationSeconds = parseDurationStringToSeconds(durationStr);
-            }
-          }
-        }
-      }
-    } catch (sErr) {
-      console.error("YouTube search duration check error:", sErr);
-    }
-
     // Check high-res thumbnail availability
     let thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
     try {
@@ -357,31 +309,13 @@ app.get("/api/info", async (req, res) => {
       // Default to hqdefault
     }
 
-    // Calculate quality-wise exact sizes based on duration
-    const durSec = durationSeconds || 180;
-    const sz1080 = formatBytes(Math.round((durSec * 4.5 * 1024 * 1024) / 8));
-    const sz720 = formatBytes(Math.round((durSec * 2.5 * 1024 * 1024) / 8));
-    const sz480 = formatBytes(Math.round((durSec * 1.2 * 1024 * 1024) / 8));
-    const sz360 = formatBytes(Math.round((durSec * 0.7 * 1024 * 1024) / 8));
-    const sz240 = formatBytes(Math.round((durSec * 0.4 * 1024 * 1024) / 8));
-
-    const sz320k = formatBytes(durSec * 40000);
-    const sz256k = formatBytes(durSec * 32000);
-    const sz192k = formatBytes(durSec * 24000);
-    const sz128k = formatBytes(durSec * 16000);
-    const szM4a = formatBytes(durSec * 18000);
-
     const responsePayload = {
-      platform: "youtube",
       videoId,
       videoUrl,
-      title,
+      title: title + " - Media Saver",
       author,
       authorUrl,
       thumbnail,
-      duration: durationStr || (durationSeconds ? formatDuration(durationSeconds) : ""),
-      durationSeconds: Math.round(durationSeconds),
-      filesizeFormatted: sz720,
       thumbnails: {
         maxres: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
         hq: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
@@ -397,8 +331,7 @@ app.get("/api/info", async (req, res) => {
           ext: "mp4",
           resolution: "1920x1080",
           qualityLabel: "1080p60 / 1080p",
-          approxSize: sz1080,
-          exactSize: sz1080,
+          approxSize: "~ 45 - 120 MB",
           badge: "Full HD"
         },
         {
@@ -408,8 +341,7 @@ app.get("/api/info", async (req, res) => {
           ext: "mp4",
           resolution: "1280x720",
           qualityLabel: "720p60 / 720p",
-          approxSize: sz720,
-          exactSize: sz720,
+          approxSize: "~ 25 - 60 MB",
           badge: "Popular"
         },
         {
@@ -419,8 +351,7 @@ app.get("/api/info", async (req, res) => {
           ext: "mp4",
           resolution: "854x480",
           qualityLabel: "480p Standard",
-          approxSize: sz480,
-          exactSize: sz480,
+          approxSize: "~ 15 - 35 MB",
           badge: "Standard"
         },
         {
@@ -430,8 +361,7 @@ app.get("/api/info", async (req, res) => {
           ext: "mp4",
           resolution: "640x360",
           qualityLabel: "360p Normal",
-          approxSize: sz360,
-          exactSize: sz360,
+          approxSize: "~ 8 - 18 MB",
           badge: "Compact"
         },
         {
@@ -441,8 +371,7 @@ app.get("/api/info", async (req, res) => {
           ext: "mp4",
           resolution: "426x240",
           qualityLabel: "240p Low",
-          approxSize: sz240,
-          exactSize: sz240,
+          approxSize: "~ 4 - 9 MB",
           badge: "Data Saver"
         }
       ],
@@ -453,8 +382,7 @@ app.get("/api/info", async (req, res) => {
           label: "MP3 Studio HD (320 kbps)",
           ext: "mp3",
           bitrate: "320 kbps",
-          approxSize: sz320k,
-          exactSize: sz320k,
+          approxSize: "~ 9 - 14 MB",
           badge: "Highest Quality"
         },
         {
@@ -463,8 +391,7 @@ app.get("/api/info", async (req, res) => {
           label: "MP3 High (256 kbps)",
           ext: "mp3",
           bitrate: "256 kbps",
-          approxSize: sz256k,
-          exactSize: sz256k,
+          approxSize: "~ 7 - 11 MB",
           badge: "Crystal Clear"
         },
         {
@@ -473,8 +400,7 @@ app.get("/api/info", async (req, res) => {
           label: "MP3 Standard (192 kbps)",
           ext: "mp3",
           bitrate: "192 kbps",
-          approxSize: sz192k,
-          exactSize: sz192k,
+          approxSize: "~ 5 - 8 MB",
           badge: "Recommended"
         },
         {
@@ -483,8 +409,7 @@ app.get("/api/info", async (req, res) => {
           label: "MP3 Light (128 kbps)",
           ext: "mp3",
           bitrate: "128 kbps",
-          approxSize: sz128k,
-          exactSize: sz128k,
+          approxSize: "~ 3 - 6 MB",
           badge: "Fastest"
         },
         {
@@ -493,118 +418,58 @@ app.get("/api/info", async (req, res) => {
           label: "M4A Audio (AAC)",
           ext: "m4a",
           bitrate: "128-256 kbps",
-          approxSize: szM4a,
-          exactSize: szM4a,
+          approxSize: "~ 4 - 8 MB",
           badge: "Original Codec"
+        }
+      ],
+      engines: [
+        {
+          id: "y2mate",
+          name: "Server 1: Y2Mate (Instant Converter)",
+          description: "One-click 1080p MP4 and 320kbps MP3 conversion with instant download button",
+          url: `https://www.y2mate.com/youtube/${videoId}`,
+          recommended: true,
+          badge: "Fastest"
+        },
+        {
+          id: "yt1s",
+          name: "Server 2: YT1S High-Speed Engine",
+          description: "Clean multi-format conversion directly prefilled for your video",
+          url: `https://yt1s.com/en/youtube-to-mp4?q=https://www.youtube.com/watch?v=${videoId}`,
+          recommended: false,
+          badge: "High Speed"
+        },
+        {
+          id: "yt5s",
+          name: "Server 3: YT5S Full HD Engine",
+          description: "High quality server supporting 1080p, 720p, 480p and high-bitrate MP3",
+          url: `https://yt5s.biz/en/youtube-to-mp4/?q=https://www.youtube.com/watch?v=${videoId}`,
+          recommended: false,
+          badge: "Full HD"
+        },
+        {
+          id: "ss",
+          name: "Server 4: SaveFrom / SS Engine",
+          description: "Classic YouTube downloader with multiple format and quality streams",
+          url: `https://ssyoutube.com/watch?v=${videoId}`,
+          recommended: false,
+          badge: "Direct"
         }
       ]
     };
 
     return res.json(responsePayload);
   } catch (error: any) {
-    console.error("Error fetching media info:", error);
+    console.error("Error fetching video info:", error);
     return res.status(500).json({
-      error: "Unable to process media. Please check the URL and try again."
+      error: "Unable to process YouTube video. Please check the URL and try again."
     });
   }
 });
 
-// DIRECT DOWNLOAD ENDPOINT: Real In-App File Generation & Streaming
-app.get("/api/download/file", async (req, res) => {
-  const urlParam = req.query.url as string;
-  const platform = (req.query.platform as string) || "youtube";
-  const type = (req.query.type as string) || "video";
-  const format = (req.query.format as string) || (type === "audio" ? "mp3" : "720");
-  const rawTitle = (req.query.title as string) || (platform === "instagram" ? "Instagram_Video" : "YouTube_Video");
-
-  if (!urlParam) {
-    return res.status(400).send("URL parameter is required");
-  }
-
-  const safeTitle = rawTitle.replace(/[/\\?%*:|"<>]/g, "").trim().replace(/\s+/g, "_").slice(0, 70) || "download";
-  const jobId = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const tmpBase = path.join(os.tmpdir(), `dl_${jobId}`);
-
-  let targetUrl = urlParam;
-  if (platform === "youtube" && !urlParam.startsWith("http")) {
-    targetUrl = `https://www.youtube.com/watch?v=${urlParam}`;
-  }
-
-  let cmd = "";
-  let expectedFile = "";
-  let finalExt = "mp4";
-  let contentType = "video/mp4";
-
-  if (platform === "instagram") {
-    if (type === "audio") {
-      finalExt = "mp3";
-      contentType = "audio/mpeg";
-      expectedFile = `${tmpBase}.mp3`;
-      cmd = `yt-dlp -x --audio-format mp3 --audio-quality 0 -o "${tmpBase}_raw.%(ext)s" "${targetUrl}" && (ffmpeg -y -i "${tmpBase}_raw.mp3" -codec:a libmp3lame -qscale:a 0 "${expectedFile}" || mv "${tmpBase}_raw.mp3" "${expectedFile}")`;
-    } else {
-      finalExt = "mp4";
-      contentType = "video/mp4";
-      expectedFile = `${tmpBase}.mp4`;
-      // Download best streams + universal ffmpeg faststart (compatible with all Android/iOS/PC players)
-      cmd = `yt-dlp -f "bv*+ba/b/best" --merge-output-format mp4 -o "${tmpBase}_raw.mp4" "${targetUrl}" && (ffmpeg -y -i "${tmpBase}_raw.mp4" -c:v copy -c:a aac -b:a 192k -movflags +faststart "${expectedFile}" || ffmpeg -y -i "${tmpBase}_raw.mp4" -c:v libx264 -preset veryfast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -movflags +faststart "${expectedFile}")`;
-    }
-  } else {
-    // YouTube
-    if (type === "audio") {
-      finalExt = "mp3";
-      contentType = "audio/mpeg";
-      expectedFile = `${tmpBase}.mp3`;
-      cmd = `yt-dlp -x --audio-format mp3 --audio-quality 0 -o "${tmpBase}_raw.%(ext)s" "${targetUrl}" && (ffmpeg -y -i "${tmpBase}_raw.mp3" -codec:a libmp3lame -qscale:a 0 "${expectedFile}" || mv "${tmpBase}_raw.mp3" "${expectedFile}")`;
-    } else {
-      finalExt = "mp4";
-      contentType = "video/mp4";
-      expectedFile = `${tmpBase}.mp4`;
-      const height = format.includes("1080") ? 1080 : format.includes("480") ? 480 : format.includes("360") ? 360 : 720;
-      cmd = `yt-dlp -f "bv*[height<=${height}]+ba/b[height<=${height}]/best" --merge-output-format mp4 -o "${tmpBase}_raw.mp4" "${targetUrl}" && (ffmpeg -y -i "${tmpBase}_raw.mp4" -c:v copy -c:a aac -movflags +faststart "${expectedFile}" || mv "${tmpBase}_raw.mp4" "${expectedFile}")`;
-    }
-  }
-
-  const downloadFilename = `${safeTitle}.${finalExt}`;
-
-  exec(cmd, { timeout: 90000 }, (err) => {
-    if (err || !fs.existsSync(expectedFile)) {
-      console.error("Download generation error:", err);
-      // Clean up any partial files
-      try {
-        const matching = fs.readdirSync(os.tmpdir()).filter(f => f.startsWith(`dl_${jobId}`));
-        for (const f of matching) fs.unlinkSync(path.join(os.tmpdir(), f));
-      } catch {}
-
-      return res.status(500).send("Download generation failed. Please try again.");
-    }
-
-    const stat = fs.statSync(expectedFile);
-    res.setHeader("Content-Disposition", `attachment; filename="${downloadFilename}"; filename*=UTF-8''${encodeURIComponent(downloadFilename)}`);
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Length", stat.size.toString());
-    res.setHeader("Accept-Ranges", "bytes");
-
-    const stream = fs.createReadStream(expectedFile);
-    stream.pipe(res);
-
-    stream.on("close", () => {
-      try {
-        if (fs.existsSync(expectedFile)) fs.unlinkSync(expectedFile);
-      } catch {}
-    });
-
-    stream.on("error", (sErr) => {
-      console.error("Stream error:", sErr);
-      try {
-        if (fs.existsSync(expectedFile)) fs.unlinkSync(expectedFile);
-      } catch {}
-    });
-  });
-});
-
-// Helper to map formats for legacy conversion endpoint if needed
-function mapDownloadFormat(format?: string): string {
-  if (!format) return "mp3";
+// Helper to map formats
+function mapDownloadFormat(format?: unknown): string {
+  if (!format || typeof format !== "string") return "mp3";
   const f = format.toLowerCase().trim();
   if (
     f === "mp3" ||
@@ -620,20 +485,59 @@ function mapDownloadFormat(format?: string): string {
   if (f === "360" || f === "360p") return "360";
   if (f === "4k" || f === "2160" || f === "1440") return "4k";
   if (f === "mp4") return "720";
+  if (f === "hd") return "720";
   return "720";
 }
 
-// 1. API: Start video/audio conversion (optional fallback)
+// 1. API: Start video/audio conversion
 app.post("/api/convert/start", async (req, res) => {
   try {
-    const { videoId, format } = req.body || {};
-    if (!videoId || typeof videoId !== "string") {
-      return res.status(400).json({ error: "videoId is required" });
-    }
-    const cleanId = videoId.replace(/[^a-zA-Z0-9_-]/g, "");
-    const targetFormat = mapDownloadFormat(format);
-    const videoUrl = `https://www.youtube.com/watch?v=${cleanId}`;
+    const { videoId, format, isInstagram, url } = req.body || {};
+    let targetId = typeof videoId === "string" ? videoId : "";
+    let isIg = Boolean(isInstagram);
 
+    if (!targetId && typeof url === "string") {
+      const igCode = extractInstagramShortcode(url);
+      if (igCode) {
+        targetId = igCode;
+        isIg = true;
+      } else {
+        targetId = extractVideoId(url) || "";
+      }
+    }
+
+    if (!targetId) {
+      return res.status(400).json({ error: "videoId or url is required" });
+    }
+    
+    // For Instagram, avoid third-party timeouts and immediately provide direct resolution with FastDL & top engines
+    if (isIg || targetId.length > 15 || targetId.includes("_")) {
+      const cleanId = targetId.replace(/[^a-zA-Z0-9_-]/g, "");
+      const igUrl = `https://www.instagram.com/reel/${cleanId}/`;
+      const fastdlUrl = `https://fastdl.app/en?url=${encodeURIComponent(igUrl)}`;
+      const snapsaveUrl = `https://snapsave.app/`;
+      const saveinstaUrl = `https://www.save-insta.com/reels-downloader/`;
+      const indownUrl = `https://indown.io/`;
+
+      return res.json({
+        success: true,
+        isInstagram: true,
+        id: `ig_${cleanId}`,
+        title: `Instagram Reel (${cleanId})`,
+        format: format || "mp4",
+        full_format: "mp4 [HD Original]",
+        direct_url: fastdlUrl,
+        engines: [
+          { name: "FastDL Pro (HD)", url: fastdlUrl },
+          { name: "SnapSave HD", url: snapsaveUrl },
+          { name: "Save-Insta", url: saveinstaUrl },
+          { name: "InDown Saver", url: indownUrl }
+        ]
+      });
+    }
+
+    const videoUrl = `https://www.youtube.com/watch?v=${targetId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+    const targetFormat = mapDownloadFormat(format);
     const apiUrl = `https://p.savenow.to/api/v2/download?url=${encodeURIComponent(videoUrl)}&format=${targetFormat}&button=1`;
     const response = await fetch(apiUrl, {
       headers: {
@@ -669,6 +573,22 @@ app.get("/api/convert/status", async (req, res) => {
       return res.status(400).json({ error: "Conversion id is required" });
     }
 
+    // Immediate resolution for Instagram conversions
+    if (id.startsWith("ig_")) {
+      const shortcode = id.replace("ig_", "");
+      const igUrl = `https://www.instagram.com/reel/${shortcode}/`;
+      const fastdlUrl = `https://fastdl.app/en?url=${encodeURIComponent(igUrl)}`;
+
+      return res.json({
+        success: 1,
+        progress: 100,
+        download_url: fastdlUrl,
+        text: "Instagram Reel Ready!",
+        title: `Instagram Reel (${shortcode})`,
+        format: "mp4 [HD]"
+      });
+    }
+
     const progressUrl = `https://p.savenow.to/api/progress?id=${encodeURIComponent(id)}`;
     const response = await fetch(progressUrl, {
       headers: {
@@ -700,63 +620,147 @@ app.get("/api/convert/status", async (req, res) => {
   }
 });
 
-// API: Download thumbnail with forced attachment download (YouTube & Instagram)
+// 3. Fast direct download redirect (polls until finished and redirects to raw file)
+app.get("/api/direct-download", async (req, res) => {
+  try {
+    const videoId = req.query.videoId as string;
+    const format = (req.query.format as string) || "mp4";
+    const isInstagram = req.query.isInstagram === 'true' || req.query.isInstagram === '1';
+
+    if (!videoId || typeof videoId !== "string") {
+      return res.status(400).send("Video ID required");
+    }
+
+    const cleanId = videoId.replace(/[^a-zA-Z0-9_-]/g, "");
+
+    // Direct Instagram download redirect using FastDL
+    if (isInstagram) {
+      const igUrl = `https://www.instagram.com/reel/${cleanId}/`;
+      return res.redirect(302, `https://fastdl.app/en?url=${encodeURIComponent(igUrl)}`);
+    }
+
+    const targetFormat = mapDownloadFormat(format);
+    const videoUrl = `https://www.youtube.com/watch?v=${cleanId}`;
+
+    const startRes = await fetch(`https://p.savenow.to/api/v2/download?url=${encodeURIComponent(videoUrl)}&format=${targetFormat}&button=1`, {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json" }
+    });
+
+    const startData = await startRes.json();
+    if (!startData || !startData.id) {
+      return res.redirect(302, `https://www.y2mate.com/youtube/${cleanId}`);
+    }
+
+    const convId = startData.id;
+    let downloadUrl = "";
+    for (let i = 0; i < 8; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      const pollRes = await fetch(`https://p.savenow.to/api/progress?id=${encodeURIComponent(convId)}`, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+      });
+      const pollData = await pollRes.json();
+      if (pollData && pollData.success === 1 && pollData.download_url) {
+        downloadUrl = pollData.download_url;
+        break;
+      }
+    }
+
+    if (downloadUrl) {
+      return res.redirect(302, downloadUrl);
+    } else {
+      return res.redirect(302, `https://www.y2mate.com/youtube/${cleanId}`);
+    }
+  } catch (err) {
+    return res.redirect(302, `https://www.y2mate.com/youtube/${req.query.videoId}`);
+  }
+});
+
+// Direct Download Redirect Endpoint
+app.get("/api/download-redirect", (req, res) => {
+  const { videoId, engine, format } = req.query;
+  if (!videoId || typeof videoId !== "string") {
+    return res.status(400).send("Video ID required");
+  }
+
+  const cleanId = videoId.replace(/[^a-zA-Z0-9_-]/g, "");
+  let target = `https://www.y2mate.com/youtube/${cleanId}`;
+
+  if (engine === "yt1s") {
+    target = format === "mp3"
+      ? `https://yt1s.com/en/youtube-to-mp3?q=https://www.youtube.com/watch?v=${cleanId}`
+      : `https://yt1s.com/en/youtube-to-mp4?q=https://www.youtube.com/watch?v=${cleanId}`;
+  } else if (engine === "yt5s") {
+    target = `https://yt5s.biz/en/youtube-to-${format === "mp3" ? "mp3" : "mp4"}/?q=https://www.youtube.com/watch?v=${cleanId}`;
+  } else if (engine === "ss") {
+    target = `https://ssyoutube.com/watch?v=${cleanId}`;
+  }
+
+  return res.redirect(302, target);
+});
+
+// API: Download thumbnail with forced attachment download & CORS headers
 app.get("/api/download-thumbnail", async (req, res) => {
   try {
-    const directUrl = req.query.url as string;
+    // Enable CORS for universal download and iframe blob access
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length");
+
     const videoId = req.query.videoId as string;
     const quality = (req.query.quality as string) || "maxresdefault";
 
-    // 1. Direct URL (e.g. Instagram CDN image)
-    if (directUrl && directUrl.startsWith("http")) {
-      const imgRes = await fetch(directUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-      });
-      if (!imgRes.ok) {
-        return res.status(404).send("Thumbnail not found");
-      }
-      const arrayBuffer = await imgRes.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      res.setHeader("Content-Type", "image/jpeg");
-      res.setHeader("Content-Disposition", 'attachment; filename="Thumbnail_HD.jpg"');
-      res.setHeader("Content-Length", buffer.length.toString());
-      res.setHeader("Cache-Control", "public, max-age=86400");
-      return res.end(buffer);
-    }
-
-    // 2. YouTube videoId
     if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-      return res.status(400).send("Invalid Video ID or Image URL");
+      return res.status(400).send("Invalid Video ID");
     }
 
     const cleanQuality = ["maxresdefault", "hqdefault", "mqdefault", "sddefault"].includes(quality)
       ? quality
       : "hqdefault";
 
-    let imgUrl = `https://i.ytimg.com/vi/${videoId}/${cleanQuality}.jpg`;
-    let imgRes = await fetch(imgUrl);
+    const fetchImageWithHeaders = async (url: string) => {
+      try {
+        const response = await fetch(url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+          }
+        });
+        if (!response.ok) return null;
+        const arrayBuf = await response.arrayBuffer();
+        const buf = Buffer.from(arrayBuf);
+        // YouTube sometimes returns a 1097 byte gray placeholder for missing maxresdefault
+        if (buf.length < 1500 && cleanQuality === "maxresdefault") {
+          return null;
+        }
+        return buf;
+      } catch {
+        return null;
+      }
+    };
 
-    // If maxres fails or returns 404, fallback to hqdefault
-    if (!imgRes.ok && cleanQuality === "maxresdefault") {
-      imgUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-      imgRes = await fetch(imgUrl);
+    let buffer = await fetchImageWithHeaders(`https://i.ytimg.com/vi/${videoId}/${cleanQuality}.jpg`);
+
+    // Fallback cascade if quality is not available
+    if (!buffer && cleanQuality === "maxresdefault") {
+      buffer = await fetchImageWithHeaders(`https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`);
+    }
+    if (!buffer) {
+      buffer = await fetchImageWithHeaders(`https://i.ytimg.com/vi/${videoId}/sddefault.jpg`);
+    }
+    if (!buffer) {
+      buffer = await fetchImageWithHeaders(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`);
+    }
+    if (!buffer) {
+      buffer = await fetchImageWithHeaders(`https://i.ytimg.com/vi/${videoId}/default.jpg`);
     }
 
-    if (!imgRes.ok) {
+    if (!buffer) {
       return res.status(404).send("Thumbnail not found");
     }
 
-    const arrayBuffer = await imgRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
+    const filename = `YouTube_Thumbnail_${videoId}_${cleanQuality}.jpg`;
     res.setHeader("Content-Type", "image/jpeg");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="YouTube_Thumbnail_${videoId}_${cleanQuality}.jpg"`
-    );
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Length", buffer.length.toString());
     res.setHeader("Cache-Control", "public, max-age=86400");
     return res.end(buffer);

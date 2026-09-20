@@ -9,7 +9,7 @@ import { Footer } from './components/Footer';
 import { VideoInfo, HistoryItem, Language } from './types';
 import { translations } from './translations';
 
-const HISTORY_KEY = 'yt_downloader_history_v2';
+const HISTORY_KEY = 'yt_downloader_history_v1';
 const LANG_KEY = 'yt_downloader_lang_v1';
 
 export default function App() {
@@ -19,14 +19,39 @@ export default function App() {
     return (saved === 'en' || saved === 'hi') ? saved : 'hi';
   });
 
-  const [urlInput, setUrlInput] = useState('');
+  const [urlInput, setUrlInput] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>(() => {
     try {
       const saved = localStorage.getItem(HISTORY_KEY);
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+      // Clean and normalize history items so all properties are guaranteed valid strings
+      return parsed
+        .filter((item: any) => item && typeof item === 'object')
+        .map((item: any) => {
+          const vid = item.videoId || '';
+          const fallbackUrl = vid
+            ? (vid.length > 15 || item.isInstagram
+                ? `https://www.instagram.com/reel/${vid}/`
+                : `https://www.youtube.com/watch?v=${vid}`)
+            : '';
+          const resolvedUrl = item.videoUrl || item.url || fallbackUrl || '';
+          return {
+            id: String(item.id || `hist-${vid || Math.random()}-${Date.now()}`),
+            videoId: String(vid),
+            videoUrl: String(resolvedUrl),
+            title: String(item.title || 'Video'),
+            author: String(item.author || ''),
+            thumbnail: String(item.thumbnail || (vid ? (item.isInstagram ? `/api/ig-thumbnail/${vid}` : `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`) : '')),
+            timestamp: typeof item.timestamp === 'number' ? item.timestamp : Date.now(),
+            isInstagram: Boolean(item.isInstagram || (item.videoUrl && (item.videoUrl.includes('instagram.com') || item.videoUrl.includes('instagr.am')))),
+          };
+        })
+        .filter((item: HistoryItem) => Boolean(item.videoUrl && item.videoUrl.trim()));
     } catch {
       return [];
     }
@@ -50,9 +75,10 @@ export default function App() {
   }, [history]);
 
   const fetchVideoInfo = async (customUrl?: string) => {
-    const targetUrl = (customUrl || urlInput).trim();
+    const rawTarget = typeof customUrl === 'string' ? customUrl : (urlInput || '');
+    const targetUrl = (rawTarget || '').trim();
     if (!targetUrl) {
-      setErrorMessage(translations[lang].errorInvalidUrl);
+      setErrorMessage(translations[lang]?.errorInvalidUrl || 'Please enter a valid URL.');
       return;
     }
 
@@ -64,29 +90,28 @@ export default function App() {
       const data = await res.json();
 
       if (!res.ok || data.error) {
-        setErrorMessage(data.error || translations[lang].errorGeneric);
+        setErrorMessage(data.error || translations[lang]?.errorGeneric || 'Failed to fetch video details.');
         setIsLoading(false);
         return;
       }
 
       setVideoInfo(data);
-      setUrlInput(data.videoUrl || targetUrl);
+      setUrlInput(String(data.videoUrl || targetUrl));
 
       // Add to history
       const newHistoryItem: HistoryItem = {
-        id: `${data.videoId}-${Date.now()}`,
-        platform: data.platform || 'youtube',
-        videoId: data.videoId,
-        videoUrl: data.videoUrl,
-        title: data.title,
-        author: data.author,
-        thumbnail: data.thumbnail,
-        duration: data.duration,
+        id: `${data.videoId || Date.now()}-${Date.now()}`,
+        videoId: String(data.videoId || ''),
+        videoUrl: String(data.videoUrl || targetUrl),
+        title: String(data.title || 'Video'),
+        author: String(data.author || ''),
+        thumbnail: String(data.thumbnail || ''),
         timestamp: Date.now(),
+        isInstagram: Boolean(data.isInstagram),
       };
 
       setHistory((prev) => {
-        const filtered = prev.filter((item) => item.videoId !== data.videoId);
+        const filtered = prev.filter((item) => item.videoId !== data.videoId && item.videoUrl !== newHistoryItem.videoUrl);
         return [newHistoryItem, ...filtered].slice(0, 8);
       });
 
@@ -96,16 +121,28 @@ export default function App() {
       }, 100);
     } catch (err: any) {
       console.error('Fetch error:', err);
-      setErrorMessage(translations[lang].errorGeneric);
+      setErrorMessage(translations[lang]?.errorGeneric || 'Failed to fetch video details.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleSelectHistory = (item: HistoryItem) => {
-    const fullUrl = item.videoUrl || (item.platform === 'instagram' ? `https://www.instagram.com/reel/${item.videoId}/` : `https://www.youtube.com/watch?v=${item.videoId}`);
-    setUrlInput(fullUrl);
-    fetchVideoInfo(fullUrl);
+  const handleSelectHistory = (selected: HistoryItem | string) => {
+    let resolvedUrl = '';
+    if (typeof selected === 'string') {
+      resolvedUrl = selected;
+    } else if (selected && typeof selected === 'object') {
+      resolvedUrl = selected.videoUrl || (selected as any).url || '';
+      if (!resolvedUrl && selected.videoId) {
+        resolvedUrl = selected.isInstagram || (selected.videoId && (selected.videoId.length > 15 || selected.videoId.includes('_')))
+          ? `https://www.instagram.com/reel/${selected.videoId}/`
+          : `https://www.youtube.com/watch?v=${selected.videoId}`;
+      }
+    }
+    const safeUrl = (resolvedUrl || '').trim();
+    if (!safeUrl) return;
+    setUrlInput(safeUrl);
+    fetchVideoInfo(safeUrl);
   };
 
   const handleClearHistory = () => {
@@ -113,8 +150,12 @@ export default function App() {
     localStorage.removeItem(HISTORY_KEY);
   };
 
+  const handleRemoveHistoryItem = (id: string) => {
+    setHistory((prev) => prev.filter((item) => item.id !== id));
+  };
+
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans selection:bg-pink-600 selection:text-white">
+    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans selection:bg-red-600 selection:text-white">
       {/* Top Navigation Header */}
       <Header lang={lang} onToggleLang={handleToggleLang} />
 
@@ -141,6 +182,7 @@ export default function App() {
           lang={lang}
           onSelect={handleSelectHistory}
           onClear={handleClearHistory}
+          onRemoveItem={handleRemoveHistoryItem}
         />
 
         {/* How to Guide and Features */}
